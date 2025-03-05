@@ -1,0 +1,7 @@
+.vscode
+*.egg-info
+examples/generated/*
+__pycache__
+venv
+build
+*.mp4
