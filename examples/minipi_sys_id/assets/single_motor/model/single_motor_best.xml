@@ -1,0 +1,85 @@
+<mujoco model="inverted pendulum">
+	  <compiler meshdir="motor_stl/" eulerseq="zyx"/>
+<!-- <visual>
+  <global offwidth="3840" offheight="2160"/>
+</visual> -->
+
+	 <asset>
+		<mesh name="motor" file="motor.stl" scale="0.013 0.013 0.013"/>
+
+      <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+      <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2"
+          width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>
+      <texture name="texplane2" type="2d" builtin="checker" rgb1="1 0.3137 0.1843" rgb2="0.0 0.30196 0.38039"
+          width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>
+	    
+      <material name="matplane" reflectance="0." texture="texplane" texrepeat="1 1" texuniform="true"/>
+      <material name="matplane2" reflectance="0.1" texture="texplane2" texrepeat="1 1" texuniform="true"/>
+      <hfield name='hf0' nrow='200' ncol='200' size="10 5 0.2 .1"/>
+      </asset>
+	<!-- <option gravity="0 0 -9.81" integrator="RK4" timestep="0.001"/> -->
+	<worldbody>
+		<camera pos="0.341 0.212 0.077" xyaxes="-0.541 0.841 -0.000 -0.265 -0.171 0.949"/>
+		<camera pos="0.132 0.136 0.068" xyaxes="-0.734 0.679 -0.000 -0.269 -0.291 0.918"/>
+
+		<light directional="true" diffuse=".4 .4 .4" specular="0.1 0.1 0.1" pos="0 0 5.0" dir="0 0 -1" castshadow="false"/>
+		<light directional="true" diffuse=".6 .6 .6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1"/>
+		<geom name="ground" type="plane" size="0 0 1" pos="0.001 0 -0.3" quat="1 0 0 0" material="matplane" condim="1" conaffinity='15'/>
+		<!-- <geom type="box" size="0.025 0.025 0.025" pos="0 -0.0385 0" rgba="0.8 0.8 0.8 1.0" contype="0" conaffinity="0" /> -->
+		<geom type="mesh" mesh="motor" pos="0 -0.07 0" euler="0 0 -90" contype="0" conaffinity="0" rgba="0.8 0.8 0.8 1"/>
+		<!-- <mesh name="motor_mesh" file="model_stl/motor.stl"/> -->
+        <body name="bar" pos="0 0 0">
+
+
+			<joint axis="0 -1 0"
+				name="hinge"
+				pos="0 0 0"
+				armature="0.0063871"
+				frictionloss="0.17487545"
+				damping="0.25193063"
+				type="hinge" />
+
+			<geom name="link_geom" type="box" size="0.0125 0.0125 0.113" pos="0 0 -0.1"
+				rgba="1 0 0 1" contype="0" conaffinity="0" />
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 0" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 0" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.025" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.025" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.05" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.05" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.075" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.075" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.1" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.1" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.125" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.125" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.15" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.15" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.175" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.175" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.2" euler="0 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+			<geom type="cylinder" size="0.005 0.0126" pos="0 0 -0.2" euler="90 0 -90" rgba="0 0 0 1" contype="0" conaffinity="0"/>
+
+
+			<inertial
+				pos="0 0 -0.1"
+				mass="0.26"
+				diaginertia="0.0011106333333333336  0.0011106333333333336 7.973333333333339e-06" />
+
+
+
+		</body>
+	</worldbody>
+	<actuator>
+		<motor ctrllimited="true" ctrlrange="-3 3" gear="1" joint="hinge" name="hinge"/>
+	</actuator>
+</mujoco>
