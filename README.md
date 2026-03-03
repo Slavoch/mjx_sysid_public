@@ -1,57 +1,138 @@
 # Mujoco System Identification
-A framework for system identification using the **MJX differentiable simulator**.
 
-## Features
-- Estimates built-in **MuJoCo parameters** (e.g., mass, inertia, control gains, and more).
-- Captures **complex non-linear behaviors** using **neural networks**.
-
-## Usage Workflow
-1. **Prepare Your System Model**
-   - Ensure you have an **XML model** of your system.
-
-2. **Collect Real-World Data**
-   - Perform real-world experiments:
-     - Record **state sequences** to identify your system (e.g., joint positions, joint velocities, main body position, and velocity).
-     - Log the **control actions** applied to your system.
-
-3. **Run System Identification**
-   - **Set up your dataset**.
-   - **Select parameters** to optimize.
-   - **Run the optimization process**.
-
-4. **Validate Optimized Parameters**
-   - See **[this example](examples/result_simulation.ipynb)** for validation.
-
----
+System identification framework built on MJX + MuJoCo.
 
 ## Installation
 
-### Create a Virtual Environment
-```
+### 1) Create virtual environment
+```bash
 python3.11 -m venv venv
 source venv/bin/activate
 ```
-### Install Dependencies
-```
-pip install mujoco
-pip install mujoco_mjx
-pip install brax
-pip install -U "jax[cuda12]"
-pip install pandas
-```
-### Install the Framework
 
+### 2) Install dependencies
+```bash
+pip install mujoco mujoco_mjx brax pandas tensorboardX
+pip install -U "jax[cuda12]"
 ```
+
+### 3) Install this project
+```bash
 pip install -e .
 ```
 
+---
 
-## Usage Examples
-- [Dataset Generation](examples/dataset_generation.ipynb)
-    - Learn how to create a dataset in the required format.
-- [Parameter Optimization](examples/optimization.ipynb)
-    - Define custom model parameters.
-    - Optimize parameters and validate the obtained results.
-- [Result Validation](examples/result_simulation.ipynb)
-    - Validate optimized parameters using a modified model.xml file.
-    - Generate a video showcasing model performance.
+## Usage
+
+### List available tasks
+```bash
+python scripts/optimize.py --list-tasks
+```
+
+### Train/optimize a task
+```bash
+python scripts/optimize.py --task=roki2.torque
+```
+
+Outputs are saved to:
+- `runs/<task>/<timestamp>/config.json`
+- `runs/<task>/<timestamp>/result.json`
+- `runs/<task>/<timestamp>/best_params.pkl`
+- `runs/<task>/<timestamp>/checkpoints/*.pkl`
+
+### Replay raw dataset (no simulation)
+```bash
+python scripts/dataset_play.py --task=roki2.torque
+```
+
+### Replay learned model vs reference (simulation)
+`experiment_play.py` always opens the MuJoCo viewer.
+
+```bash
+python scripts/experiment_play.py \
+  --task=roki2.torque \
+  --checkpoint=/absolute/path/to/checkpoint.pkl
+```
+
+After one playback completes, press Enter to replay.
+
+---
+
+## How To Train The Model You Need
+
+### 1) Pick a base task
+Start from an existing task in `config/tasks/`, for example `config/tasks/roki2.py`.
+
+### 2) Adjust task config
+In task config, update:
+- `data.dataset_path`, `data.dt`, `data.motor_id`, `data.num_lags`
+- `sim.model_xml`, solver/integrator settings
+- `train.max_iter`, `train.batch_size`, `train.learning_rate`
+- `experiment.controllers`, `experiment.frictions`, `experiment.changers`
+
+### 3) Register task key
+Add your task into `config/registry.py` (`TASK_REGISTRY`) so it becomes runnable from CLI.
+
+### 4) Run training
+```bash
+python scripts/optimize.py --task=<your.task.key>
+```
+
+---
+
+## How To Add Models
+
+Core model factories live in `sysidmjx/models.py`.
+
+You can add:
+- controller factories (`get_controller_*`)
+- friction factories (`make_friction_*`)
+- parameter changers (`make_changer_*`)
+
+Expected pattern:
+- a factory receives init specs/hyperparameters
+- returns `(callable_fn, init_params_dict)`
+- callable is JAX-friendly and typically `@jax.jit`
+
+Then reference your new function in task config using `ComponentConfig(func=..., params=...)`.
+
+---
+
+## TensorBoard: How To Monitor Learning
+
+Runs are logged with `tensorboardX` under `runs/<task>/<timestamp>/`.
+
+Start TensorBoard from repo root:
+```bash
+tensorboard --logdir runs
+```
+
+Useful curves:
+- `train/loss`
+- `train/grad_norm`
+- `train/loss_qpos`
+- `train/loss_qvel`
+- scalar params under `params/...` (when parameter set is small)
+
+---
+
+## Dataset Structure
+
+Loader: `sysidmjx/assets/single_motor/dataloader/single_joint.py`
+
+Dataset is a CSV with lagged columns. For each feature in `{qpos, qvel, qact}` and each lag `k` in `[0..num_lags]`, required column name is:
+
+`<feature>_motor<motor_id>_lag<k>`
+
+Example for `motor_id=0`, `num_lags=3`:
+- `qpos_motor0_lag0`, `qpos_motor0_lag1`, `qpos_motor0_lag2`, `qpos_motor0_lag3`
+- `qvel_motor0_lag0`, ... `qvel_motor0_lag3`
+- `qact_motor0_lag0`, ... `qact_motor0_lag3`
+
+Notes:
+- CSV rows with NaN are dropped.
+- `lag0` is current state/action.
+- `lag1..lagN` are used as future targets for training.
+
+---

@@ -7,3 +7,5 @@ build
 *.mp4
 *generated*
 *.joblib
+runs/
+experiment*/
