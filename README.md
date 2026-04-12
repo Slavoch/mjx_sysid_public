@@ -2,7 +2,8 @@
 
 System identification framework built on MJX + MuJoCo.
 
-<video src="docs/IROS25_1428_VI_fi.mp4" controls width="100%">
+<video controls width="100%">
+  <source src="https://wavegit.mipt.ru/Slavoch/mjx_sysid/-/raw/main/docs/IROS25_1428_VI_fi.mp4" type="video/mp4">
   Your browser does not support the video tag.
 </video>
 
