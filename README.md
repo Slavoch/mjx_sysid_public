@@ -2,6 +2,10 @@
 
 System identification framework built on MJX + MuJoCo.
 
+<video src="docs/IROS25_1428_VI_fi.mp4" controls width="100%">
+  Your browser does not support the video tag.
+</video>
+
 ## Installation
 
 ### 1) Create virtual environment
@@ -136,3 +140,18 @@ Notes:
 - `lag1..lagN` are used as future targets for training.
 
 ---
+
+## Cite us
+
+If you use this project in your research, please cite:
+
+```bibtex
+@inproceedings{kovalev2025achieving,
+  title={Achieving Precise and Reliable Locomotion with Differentiable Simulation-Based System Identification},
+  author={Kovalev, Vyacheslav and Chaikovskaia, Ekaterina and Davydenko, Egor and Gorbachev, Roman},
+  booktitle={2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)},
+  pages={4767--4772},
+  year={2025},
+  organization={IEEE}
+}
+```
