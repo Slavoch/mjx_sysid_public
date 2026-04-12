@@ -2,10 +2,20 @@
 
 System identification framework built on MJX + MuJoCo.
 
-<video controls width="100%">
-  <source src="https://wavegit.mipt.ru/Slavoch/mjx_sysid/-/raw/main/docs/IROS25_1428_VI_fi.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[Open demo video](https://wavegit.mipt.ru/Slavoch/mjx_sysid/-/raw/main/docs/IROS25_1428_VI_fi.mp4)
+
+## Qualitative Comparison
+
+The animations below compare behavior before and after system identification. The green motor follows the replayed real trajectory, while the other motor is the simulated one. Closer alignment between them means the simulation matches the real system more accurately.
+
+### Before System Identification
+
+![Before system identification](docs/ezgif-1817e477473ca576.gif)
+
+### After System Identification
+
+![After system identification](docs/ezgif-7c91bd5f79225753.gif)
+
 
 ## Installation
 
