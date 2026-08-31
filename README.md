@@ -97,7 +97,7 @@ Training samples short windows from the recorded trajectories, initializes the s
 
 For learned parameters $z$, the rollout objective is:
 
-$$
+```math
 \mathcal{L}(z)
 =
 \frac{1}{MP}
@@ -106,27 +106,27 @@ $$
 \left\|
 W\left(\hat{s}_{i,j}-s_{i,j}\right)
 \right\|_2^2,
-$$
+```
 
 subject to:
 
-$$
+```math
 \hat{s}_{0,j}=s_{0,j},
 \qquad
 \hat{s}_{i+1,j}
 =
 \Phi_z\left(\hat{s}_{i,j},a_{i,j};\Delta t\right).
-$$
+```
 
 Here, $M$ is the number of sampled trajectory windows, $P$ is the prediction horizon, $s=(q,\dot q)$ is the measured state, $\hat{s}$ is the simulated state, $a$ is the recorded command, and $\Phi_z$ is one MJX simulation step. The diagonal matrix $W$ sets the relative position and velocity scales and weights:
 
-$$
+```math
 W =
 \begin{bmatrix}
 w_q & 0 \\
 0 & w_{\dot q}
 \end{bmatrix}.
-$$
+```
 
 The implementation can replace the squared pointwise penalty with a configurable pseudo-Huber penalty for greater robustness to outliers.
 
