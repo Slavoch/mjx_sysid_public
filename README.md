@@ -1,160 +1,151 @@
-# Mujoco System Identification
+# MJX System Identification
 
-System identification framework built on MJX + MuJoCo.
+Calibrate a single-motor MuJoCo model from motion logs—without a torque sensor.
 
-[Open demo video](https://wavegit.mipt.ru/Slavoch/mjx_sysid/-/raw/main/docs/IROS25_1428_VI_fi.mp4)
+MJX System Identification differentiates through simulated trajectories to find the actuator parameters that make simulation follow real hardware. It can fit MuJoCo parameters such as friction loss, damping, and armature, or learn richer actuator behavior with friction laws and neural-network residuals.
 
-## Qualitative Comparison
+## Before and after identification
 
-The animations below compare behavior before and after system identification. The green motor follows the replayed real trajectory, while the other motor is the simulated one. Closer alignment between them means the simulation matches the real system more accurately.
+| Before | After |
+| --- | --- |
+| ![Simulation before system identification](docs/ezgif-1817e477473ca576.gif) | ![Simulation after system identification](docs/ezgif-7c91bd5f79225753.gif) |
 
-### Before System Identification
+The green arm follows the recorded hardware trajectory; the other arm is the simulated model. Watch the [full demonstration video](docs/IROS25_1428_VI_fi.mp4).
 
-![Before system identification](docs/ezgif-1817e477473ca576.gif)
+## What you provide
 
-### After System Identification
+- A single-DoF [MuJoCo XML](docs/xml.md) model of the motor and its load.
+- One or more CSV [trajectories](docs/datasets.md) with `time_s`, `qpos`, `qvel`, and `qact`.
+- Any signals needed to reconstruct the control law, such as PD targets and gains.
 
-![After system identification](docs/ezgif-7c91bd5f79225753.gif)
+## What you can identify
 
+- Built-in MuJoCo parameters: `frictionloss`, `damping`, `armature`, actuator gain, filter constants, and friction-solver settings.
+- Parametric friction models, including Karnopp and Stribeck variants.
+- PD mappings when the relationship between commands and torque is unknown.
+- Learned torque or PD residuals for dynamics that a compact parametric model cannot capture.
 
-## Installation
+See [Motor models](docs/motor_models.md) for the available components and bundled experiments.
 
-### 1) Create virtual environment
+## Quick start
+
+Python 3.10 or newer is required; the example below uses Python 3.11. Run the commands from the repository root.
+
 ```bash
 python3.11 -m venv venv
 source venv/bin/activate
-```
 
-### 2) Install dependencies
-```bash
-pip install mujoco mujoco_mjx brax pandas tensorboardX
-pip install -U "jax[cuda12]"
-```
-
-### 3) Install this project
-```bash
 pip install -e .
 ```
 
----
+This installs the default CPU build of JAX. For NVIDIA GPU acceleration with CUDA 12, additionally run:
 
-## Usage
+```bash
+pip install -U "jax[cuda12]"
+```
 
-### List available tasks
+The bundled tasks use the filtered Encos8112 dataset. Generate it from the tracked raw trajectories before the first run:
+
+```bash
+python scripts/filter_motion_sg.py assets/datasets/encos8112_4p25kg_servant
+```
+
+Then list the configured experiments and run the baseline parameter identification:
+
 ```bash
 python scripts/optimize.py --list-tasks
+python scripts/optimize.py --task=encos8112.pd_then_changers
 ```
 
-### Train/optimize a task
-```bash
-python scripts/optimize.py --task=roki2.torque
+Each run is written to:
+
+```text
+runs/<task>/<timestamp>/
+├── config.json
+├── result.json
+├── best_params.pkl
+├── loss_history.npy
+├── grad_norm_history.npy
+├── events.out.tfevents.*
+└── checkpoints/
+    └── epoch_<step>.pkl
 ```
 
-Outputs are saved to:
-- `runs/<task>/<timestamp>/config.json`
-- `runs/<task>/<timestamp>/result.json`
-- `runs/<task>/<timestamp>/best_params.pkl`
-- `runs/<task>/<timestamp>/checkpoints/*.pkl`
+Monitor training with TensorBoard:
 
-### Replay raw dataset (no simulation)
-```bash
-python scripts/dataset_play.py --task=roki2.torque
-```
-
-### Replay learned model vs reference (simulation)
-`experiment_play.py` always opens the MuJoCo viewer.
-
-```bash
-python scripts/experiment_play.py \
-  --task=roki2.torque \
-  --checkpoint=/absolute/path/to/checkpoint.pkl
-```
-
-After one playback completes, press Enter to replay.
-
----
-
-## How To Train The Model You Need
-
-### 1) Pick a base task
-Start from an existing task in `config/tasks/`, for example `config/tasks/roki2.py`.
-
-### 2) Adjust task config
-In task config, update:
-- `data.dataset_path`, `data.dt`, `data.motor_id`, `data.num_lags`
-- `sim.model_xml`, solver/integrator settings
-- `train.max_iter`, `train.batch_size`, `train.learning_rate`
-- `experiment.controllers`, `experiment.frictions`, `experiment.changers`
-
-### 3) Register task key
-Add your task into `config/registry.py` (`TASK_REGISTRY`) so it becomes runnable from CLI.
-
-### 4) Run training
-```bash
-python scripts/optimize.py --task=<your.task.key>
-```
-
----
-
-## How To Add Models
-
-Core model factories live in `sysidmjx/models.py`.
-
-You can add:
-- controller factories (`get_controller_*`)
-- friction factories (`make_friction_*`)
-- parameter changers (`make_changer_*`)
-
-Expected pattern:
-- a factory receives init specs/hyperparameters
-- returns `(callable_fn, init_params_dict)`
-- callable is JAX-friendly and typically `@jax.jit`
-
-Then reference your new function in task config using `ComponentConfig(func=..., params=...)`.
-
----
-
-## TensorBoard: How To Monitor Learning
-
-Runs are logged with `tensorboardX` under `runs/<task>/<timestamp>/`.
-
-Start TensorBoard from repo root:
 ```bash
 tensorboard --logdir runs
 ```
 
-Useful curves:
-- `train/loss`
-- `train/grad_norm`
-- `train/loss_qpos`
-- `train/loss_qvel`
-- scalar params under `params/...` (when parameter set is small)
+## Identify your own motor
 
----
+1. **Collect representative trajectories.** Cover the positions, velocities, and commands the motor will encounter. See [Datasets](docs/datasets.md).
+2. **Model the physical plant.** Describe the motor, joint, and measured load in a single-DoF [MuJoCo XML](docs/xml.md).
+3. **Choose the actuator model.** Start with friction loss, damping, and armature before moving to richer [motor models](docs/motor_models.md).
+4. **Create a task.** Combine the XML, trajectories, model components, and optimization settings in a `RunConfig`, then register it in `config/registry.py`.
+5. **Train and validate.** Use independent trajectories where available, then inspect full-sequence replay and aggregate plots. See [Learning](docs/learning.md) and [Validation](docs/validation.md).
 
-## Dataset Structure
+If your measurements are noisy, the repository includes a Savitzky–Golay preprocessing script:
 
-Loader: `sysidmjx/assets/single_motor/dataloader/single_joint.py`
+```bash
+python scripts/filter_motion_sg.py path/to/dataset
+```
 
-Dataset is a CSV with lagged columns. For each feature in `{qpos, qvel, qact}` and each lag `k` in `[0..num_lags]`, required column name is:
+## How it works
 
-`<feature>_motor<motor_id>_lag<k>`
+Training samples short windows from the recorded trajectories, initializes the simulation from the measured state, and rolls the MuJoCo plant forward under the recorded commands. JAX gradients update the selected actuator and plant parameters to reduce position and velocity error over the prediction horizon.
 
-Example for `motor_id=0`, `num_lags=3`:
-- `qpos_motor0_lag0`, `qpos_motor0_lag1`, `qpos_motor0_lag2`, `qpos_motor0_lag3`
-- `qvel_motor0_lag0`, ... `qvel_motor0_lag3`
-- `qact_motor0_lag0`, ... `qact_motor0_lag3`
+For learned parameters $z$, the rollout objective is:
 
-Notes:
-- CSV rows with NaN are dropped.
-- `lag0` is current state/action.
-- `lag1..lagN` are used as future targets for training.
+$$
+\mathcal{L}(z)
+=
+\frac{1}{MP}
+\sum_{j=0}^{M-1}
+\sum_{i=1}^{P}
+\left\|
+W\left(\hat{s}_{i,j}-s_{i,j}\right)
+\right\|_2^2,
+$$
 
----
+subject to:
 
-## Cite us
+$$
+\hat{s}_{0,j}=s_{0,j},
+\qquad
+\hat{s}_{i+1,j}
+=
+\Phi_z\left(\hat{s}_{i,j},a_{i,j};\Delta t\right).
+$$
 
-If you use this project in your research, please cite:
+Here, $M$ is the number of sampled trajectory windows, $P$ is the prediction horizon, $s=(q,\dot q)$ is the measured state, $\hat{s}$ is the simulated state, $a$ is the recorded command, and $\Phi_z$ is one MJX simulation step. The diagonal matrix $W$ sets the relative position and velocity scales and weights:
+
+$$
+W =
+\begin{bmatrix}
+w_q & 0 \\
+0 & w_{\dot q}
+\end{bmatrix}.
+$$
+
+The implementation can replace the squared pointwise penalty with a configurable pseudo-Huber penalty for greater robustness to outliers.
+
+During training, validation uses longer windows from `DatasetSpec.val_runs`; the best windowed validation result becomes `best_params.pkl`. Post-training playback replays complete command sequences to expose drift that windowed loss can hide.
+
+For implementation details, see [Architecture](docs/architecture.md).
+
+## Documentation
+
+- [Dataset format and collection](docs/datasets.md)
+- [MuJoCo plant model](docs/xml.md)
+- [Actuator and friction models](docs/motor_models.md)
+- [Optimization settings](docs/learning.md)
+- [Replay and validation](docs/validation.md)
+- [Code architecture](docs/architecture.md)
+
+## Research
+
+This repository accompanies work presented at IROS 2025 and in IEEE Access (2026). If you use it in your research, please cite:
 
 ```bibtex
 @inproceedings{kovalev2025achieving,
@@ -165,4 +156,16 @@ If you use this project in your research, please cite:
   year={2025},
   organization={IEEE}
 }
+
+@article{kovalev2026trajectory,
+  title={Trajectory-based actuator identification via differentiable simulation},
+  author={Kovalev, Vyacheslav and Chaikovskaia, Ekaterina and Davydenko, Egor and Gorbachev, Roman},
+  journal={IEEE Access},
+  year={2026},
+  publisher={IEEE}
+}
 ```
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

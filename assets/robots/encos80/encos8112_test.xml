@@ -1,0 +1,61 @@
+<mujoco model="encos80">
+    <default>
+        <geom contype="0" conaffinity="0"/>
+    </default>
+
+    <visual>
+        <map znear="0.01" zfar="10"/>
+    </visual>
+
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1="0.2 0.3 0.4" rgb2="0.1 0.1 0.1"/>
+        <material name="matgrid" texture="grid" texrepeat="10 10" reflectance="0.2"/>
+    </asset>
+
+    <option gravity="0 0 -9.81" integrator="RK4" timestep="0.001"/>
+
+    <worldbody>
+        <geom name="floor" type="plane" size="2 2 0.1" rgba="0.8 0.8 0.8 1" material="matgrid"/>
+        <light name="light" pos="0 0 1.5" dir="0 0 -1" diffuse="1 1 1" directional="true"/>
+
+        <body name="motor_body" pos="0 0 0.5">
+            <geom name="motor_body_visual" type="cylinder" size="0.0525 0.035" pos="0 0.05 0" quat="0.7071 0.7071 0 0" rgba="0.16 0.34 0.72 1"/>
+            <geom name="motor_cap_front_visual" type="cylinder" size="0.0525 0.003" pos="0 0.0115 0" quat="0.7071 0.7071 0 0" rgba="0.9 0.92 0.95 1"/>
+            <geom name="motor_cap_back_visual" type="cylinder" size="0.0525 0.003" pos="0 0.0885 0" quat="0.7071 0.7071 0 0" rgba="0.1 0.11 0.13 1"/>
+
+            <body name="load" pos="0 0 0">
+                <joint name="hinge" type="hinge" axis="0 -1 0" pos="0 0 0" frictionloss="0.00001" solreffriction="0.02 1" solimpfriction="0.9 0.95 0.001 0.5 2"/>
+                <geom name="load_geom" type="cylinder" size="0.085 0.0125" pos="0 -0.0025 -0.252" quat="0.7071 0.7071 0 0" rgba="1 0 0 1"/>
+                <inertial pos="0 0 -0.252" mass="4.9" diaginertia="0.03005 0.0601 0.03005"/>
+
+                <!-- <body name="load_holder" pos="0 -0.08 -0.265">
+                    <geom name="load_holder_geom" type="box" size="0.0125 0.0125 0.05" rgba="0.6 0.6 0.6 1"/>
+                    <inertial pos="0 0 0" mass="0.1150442477876106" diaginertia="0.00010123783185840707 0.00010123783185840707 1.1983775811209436e-05"/>
+                </body>
+
+                <body name="load_disk" pos="0 -0.025 -0.265">
+                    <geom name="load_disk_geom" type="cylinder" size="0.075 0.01" quat="0.7071 0.7071 0 0" rgba="0.1 0.1 0.1 1"/>
+                    <geom name="load_disk_hole_visual" type="cylinder" size="0.015 0.0105" quat="0.7071 0.7071 0 0" rgba="0.8 0.8 0.8 1"/>
+                    <inertial pos="0 0 0" mass="1.25" diaginertia="0.0018697916666666669 0.00365625 0.0018697916666666669"/>
+                </body>
+
+                <body name="load_disk_5kg" pos="0 -0.0475 -0.265">
+                    <geom name="load_disk_5kg_geom" type="cylinder" size="0.085 0.0125" quat="0.7071 0.7071 0 0" rgba="0.05 0.05 0.05 1"/>
+                    <geom name="load_disk_5kg_hole_visual" type="cylinder" size="0.015 0.013" quat="0.7071 0.7071 0 0" rgba="0.8 0.8 0.8 1"/>
+                    <inertial pos="0 0 0" mass="2.5" diaginertia="0.004786458333333333 0.0093125 0.004786458333333333"/>
+                </body>
+
+                <body name="load_disk_0p5kg" pos="0 -0.065 -0.265">
+                    <geom name="load_disk_0p5kg_geom" type="cylinder" size="0.055 0.005" quat="0.7071 0.7071 0 0" rgba="0.2 0.2 0.2 1"/>
+                    <geom name="load_disk_0p5kg_hole_visual" type="cylinder" size="0.015 0.0055" quat="0.7071 0.7071 0 0" rgba="0.8 0.8 0.8 1"/>
+                    <inertial pos="0 0 0" mass="0.5" diaginertia="0.0004104166666666667 0.0008125000000000001 0.0004104166666666667"/>
+                </body> -->
+            </body>
+        </body>
+    </worldbody>
+
+    <actuator>
+        <motor name="hinge" joint="hinge" gear="1" ctrllimited="true" ctrlrange="-90 90"/>
+        <!-- <position name="hinge_position" joint="hinge" kp="20" kv="1" ctrllimited="true" ctrlrange="-20. 20."/> -->
+    </actuator>
+</mujoco>

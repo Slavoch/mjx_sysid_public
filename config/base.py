@@ -6,11 +6,20 @@ import mujoco
 
 
 @dataclass(frozen=True)
+class DatasetSpec:
+    model_xml: str
+    runs: tuple[str, ...]
+    val_runs: tuple[str, ...] = ()
+    rollout_fields: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class DataConfig:
-    dataset_path: str
+    dataset: DatasetSpec
     dt: float = 0.002
-    motor_id: int = 0
-    num_lags: int = 1
+    history_len: int = 1
+    prediction_horizon: int = 1
+    val_prediction_horizon: int | None = None
 
 
 @dataclass(frozen=True)
@@ -33,10 +42,14 @@ class TrainConfig:
     max_iter: int = 100
     batch_size: int = 1
     learning_rate: float = 1e-2
+    learning_rate_final: float | None = None
     early_stop_patience: int = 200
     early_stop_min_delta: float = 0.0
     loss_w_qpos: float = 1.0
     loss_w_qvel: float = 0.0
+    loss_qpos_scale: float = 1.0
+    loss_qvel_scale: float = 1.0
+    loss_huber_delta: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,7 +61,7 @@ class ComponentConfig:
 @dataclass(frozen=True)
 class ExperimentConfig:
     name: str
-    controllers: tuple[ComponentConfig, ...] = ()
+    models: tuple[ComponentConfig, ...] = ()
     frictions: tuple[ComponentConfig, ...] = ()
     changers: tuple[ComponentConfig, ...] = ()
 

@@ -36,7 +36,7 @@ def _run_task(cfg: RunConfig, run_dir: Path, logger: Any, task_name: str) -> dic
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified optimization entrypoint.")
-    parser.add_argument("--task", type=str, help="Task key, e.g. optimal_torque_roki2.single_motor_baseline")
+    parser.add_argument("--task", type=str, help="Task key, e.g. encos8112.pd_then_changers")
     parser.add_argument("--list-tasks", action="store_true", help="List registered task keys and exit.")
     return parser.parse_args()
 

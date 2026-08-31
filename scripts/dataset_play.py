@@ -22,55 +22,48 @@ import mujoco
 import mujoco.viewer
 
 from config.registry import available_tasks, get_task_config
-from sysidmjx.assets.single_motor.dataloader.single_joint import data_load
+from sysidmjx.assets.single_motor.dataloader.single_joint import SingleMotorDataLoader
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Play dataset in real time (replay states only). 1 sec data = 1 sec wall clock."
     )
-    parser.add_argument("--task", type=str, help="Task key (e.g. roki2.torque).")
+    parser.add_argument("--task", type=str, help="Task key (e.g. encos8112.pd_then_changers).")
     parser.add_argument("--list-tasks", action="store_true", help="List registered task keys and exit.")
     return parser.parse_args()
 
 
-def _get_config(task: str) -> tuple[str, str, float, int, int]:
-    """Resolve dataset path, model path, dt, num_lags, motor_id from task config."""
+def _get_config(task: str):
+    """Resolve task config for dataset replay."""
     cfg = get_task_config(task)
-    dataset_path = cfg.data.dataset_path
-    model_xml = cfg.sim.model_xml
-    if not Path(dataset_path).is_absolute():
-        dataset_path = str(REPO_ROOT / dataset_path)
+    model_xml = cfg.data.dataset.model_xml
     if not Path(model_xml).is_absolute():
         model_xml = str(REPO_ROOT / model_xml)
-    return dataset_path, model_xml, cfg.data.dt, cfg.data.num_lags, cfg.data.motor_id
+    return cfg, model_xml
 
 
 def run_replay(
     *,
-    dataset_path: str,
+    cfg,
     model_xml: str,
-    dt: float,
-    motor_id: int,
-    num_lags: int,
 ) -> None:
-    _, df = data_load(
-        data_path=dataset_path,
-        motor_id=motor_id,
-        num_lags=num_lags,
+    loader = SingleMotorDataLoader.from_spec(
+        spec=cfg.data.dataset,
+        history_len=cfg.data.history_len,
+        prediction_horizon=cfg.data.prediction_horizon,
         dtype=np.float32,
+        repo_root=REPO_ROOT,
     )
+    run_frame = loader.frames_by_run[0]
+    df = run_frame.frame
 
-    qpos = np.asarray(df["qpos"].values)
-    qvel = np.asarray(df["qvel"].values)
-    if qpos.ndim > 1:
-        qpos = qpos.squeeze(axis=1)
-    if qvel.ndim > 1:
-        qvel = qvel.squeeze(axis=1)
+    qpos = df["qpos"].to_numpy(dtype=np.float64)
+    qvel = df["qvel"].to_numpy(dtype=np.float64)
     n_steps = len(qpos)
 
     mj_model = mujoco.MjModel.from_xml_path(model_xml)
-    mj_model.opt.timestep = dt
+    mj_model.opt.timestep = cfg.data.dt
     mj_data = mujoco.MjData(mj_model)
 
     with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
@@ -83,7 +76,7 @@ def run_replay(
                 viewer.sync()
 
                 elapsed = time.perf_counter() - t0
-                sleep_time = (i + 1) * dt - elapsed
+                sleep_time = (i + 1) * cfg.data.dt - elapsed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
@@ -103,14 +96,11 @@ def main() -> int:
         print("Missing --task. Use --list-tasks to see available tasks.", file=sys.stderr)
         return 1
 
-    dataset_path, model_xml, dt, num_lags, motor_id = _get_config(args.task)
+    cfg, model_xml = _get_config(args.task)
 
     run_replay(
-        dataset_path=dataset_path,
+        cfg=cfg,
         model_xml=model_xml,
-        dt=dt,
-        motor_id=motor_id,
-        num_lags=num_lags,
     )
     return 0
 

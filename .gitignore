@@ -1,11 +1,14 @@
 .vscode
 *.egg-info
-examples/generated/*
 __pycache__
 venv
 build
-*.mp4
-*generated*
 *.joblib
 runs/
+runs_supervised/
 experiment*/
+servant_runs*/
+*_twin.xml
+assets/datasets/*_sg/
+*.mp4
+!docs/*.mp4

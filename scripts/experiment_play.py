@@ -17,6 +17,7 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -27,28 +28,39 @@ import mujoco.viewer
 from mujoco import mjx
 
 from config.registry import available_tasks, get_task_config
-from sysidmjx.assets.single_motor.dataloader.single_joint import data_load
+from sysidmjx.core import generate_loss_train_functions
 from sysidmjx.models import compose_action_model
-from sysidmjx.optimizers.single_motor import _apply_jax_config_defaults, _build_component_factory
+from sysidmjx.optimizers.single_motor import _build_component_factory
 from sysidmjx.utils.xml_clone import make_twin_xml
 
 # Validation playback settings (moderate, not overly strict).
 # We keep dataset-level dt unchanged by running a few smaller substeps per sample.
-_VAL_SUBSTEPS_PER_SAMPLE = 4
-_VAL_SOLVER_ITERATIONS = 20
+_VAL_SUBSTEPS_PER_SAMPLE = 1
+_VAL_SOLVER_ITERATIONS = 1
 _VAL_LS_ITERATIONS = 20
 _VAL_TOLERANCE = 1e-9
-_VAL_INTEGRATOR = mujoco.mjtIntegrator.mjINT_RK4
+_VAL_INTEGRATOR = mujoco.mjtIntegrator.mjINT_EULER
+
+
+def _apply_jax_playback_config() -> None:
+    jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_default_matmul_precision", "high")
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate trajectory from checkpoint and visualize."
     )
-    parser.add_argument("--task", type=str, help="Task key (e.g. roki2.torque).")
+    parser.add_argument("--task", type=str, help="Task key (e.g. encos8112.pd_then_changers).")
     parser.add_argument(
         "--checkpoint",
         type=str,
         help="Path to .pkl checkpoint file.",
+    )
+    parser.add_argument(
+        "--run-index",
+        type=int,
+        default=0,
+        help="Dataset run index to replay.",
     )
     parser.add_argument("--list-tasks", action="store_true", help="List tasks and exit.")
     return parser.parse_args()
@@ -98,6 +110,14 @@ def _apply_changers_to_model(model: mujoco.MjModel, params: dict | None) -> None
             model.dof_damping[:] = np.abs(np.asarray(ch["damping"]).reshape(-1))
         if "frictionloss" in ch:
             model.dof_frictionloss[:] = np.abs(np.asarray(ch["frictionloss"]).reshape(-1))
+        if "actuator_filter_timeconst" in ch:
+            model.actuator_dynprm[0, 0] = float(
+                np.abs(np.asarray(ch["actuator_filter_timeconst"]).reshape(-1)[0])
+            )
+        if "actuator_gain" in ch:
+            model.actuator_gainprm[0, 0] = float(
+                np.abs(np.asarray(ch["actuator_gain"]).reshape(-1)[0])
+            )
 
 
 def _set_high_precision_validation_options(model: mujoco.MjModel, dt: float) -> None:
@@ -110,100 +130,296 @@ def _set_high_precision_validation_options(model: mujoco.MjModel, dt: float) -> 
         model.opt.tolerance = float(_VAL_TOLERANCE)
 
 
+def _mlp_forward_numpy(mlp_params: list[dict], x: np.ndarray) -> float:
+    y = np.asarray(x, dtype=np.float64)
+    for layer in mlp_params[:-1]:
+        y = np.maximum(y @ np.asarray(layer["w"]) + np.asarray(layer["b"]), 0.0)
+    y = y @ np.asarray(mlp_params[-1]["w"]) + np.asarray(mlp_params[-1]["b"])
+    return float(np.ravel(y)[0])
+
+
+def _make_numpy_action(cfg, params: dict):
+    model_name = getattr(cfg.experiment.models[0].func, "__name__", "")
+    if (
+        len(cfg.experiment.models) != 1
+        or cfg.experiment.frictions
+        or model_name not in {"get_model_pd_residual", "get_model_isotropic_pd_residual"}
+        or len(params.get("models", {})) != 1
+    ):
+        return None
+
+    isotropic = model_name == "get_model_isotropic_pd_residual"
+    model_cfg = cfg.experiment.models[0].params
+    model_params = next(iter(params["models"].values()))
+    input_signals = tuple(model_cfg.get("input_signals", ("tau_cmd", "qpos", "qvel")))
+    target_qpos_field = model_cfg.get("target_qpos_field", "target_qpos")
+    target_qvel_field = model_cfg.get("target_qvel_field", "target_qvel")
+    kp_field = model_cfg.get("kp_field", "kp")
+    kd_field = model_cfg.get("kd_field", "kd")
+
+    def action(data: mujoco.MjData, control: dict[str, np.ndarray], i: int) -> np.ndarray:
+        tau_pd = (
+            control[kp_field][i] * (control[target_qpos_field][i] - data.qpos)
+            + control[kd_field][i] * (control[target_qvel_field][i] - data.qvel)
+        )
+        features = []
+        for signal in input_signals:
+            if signal in ("tau_cmd", "tau_pd"):
+                features.append(tau_pd)
+            elif signal == "qpos":
+                features.append(data.qpos)
+            elif signal == "qvel":
+                features.append(data.qvel)
+            elif signal == "logged_tau_cmd":
+                features.append(control["tau_cmd"][i])
+            else:
+                features.append(control[signal][i])
+        nn_in = np.concatenate([np.ravel(x) for x in features])
+        delta_tau = _mlp_forward_numpy(model_params["mlp"], nn_in)
+        if isotropic:
+            delta_tau -= _mlp_forward_numpy(model_params["mlp"], -nn_in)
+        return tau_pd + delta_tau
+
+    return action
+
+
+class PlaybackRunner:
+    def __init__(self, task: str, checkpoint: str) -> None:
+        _apply_jax_playback_config()
+        print(f"[play] Loading task config: {task}")
+        self.cfg = get_task_config(task)
+        self.checkpoint_path = _resolve_checkpoint_path(checkpoint)
+        print(f"[play] Using checkpoint: {self.checkpoint_path}")
+
+        self.model_xml = _resolve(self.cfg.data.dataset.model_xml)
+        print("[play] Loading model parameters...")
+        with self.checkpoint_path.open("rb") as f:
+            self.best_params = pickle.load(f)
+        print("[play] Model parameters loaded")
+
+        print(f"[play] Building MuJoCo model: {self.model_xml}")
+        self.model = mujoco.MjModel.from_xml_path(str(self.model_xml))
+        _set_high_precision_validation_options(self.model, self.cfg.data.dt)
+        _apply_changers_to_model(self.model, self.best_params)
+        self.numpy_action = _make_numpy_action(self.cfg, self.best_params)
+        if self.numpy_action is not None:
+            print("[play] Using native MuJoCo + NumPy action playback")
+            return
+
+        dataset_stub = {
+            "qpos_hist": jnp.zeros(
+                (1, self.cfg.data.history_len, self.model.nq),
+                dtype=jnp.float64,
+            ),
+            "time_index": jnp.arange(1, dtype=jnp.int32),
+        }
+        model_factories = [
+            _build_component_factory(c, dataset_stub)
+            for c in self.cfg.experiment.models
+        ]
+        friction_factories = [
+            _build_component_factory(c, dataset_stub)
+            for c in self.cfg.experiment.frictions
+        ]
+        changer_factories = [
+            _build_component_factory(c, dataset_stub)
+            for c in self.cfg.experiment.changers
+        ]
+        self.make_action, _, _ = compose_action_model(
+            models=model_factories,
+            frictions=friction_factories,
+            changers=changer_factories,
+            seed=jax.random.PRNGKey(self.cfg.train.seed),
+        )
+        mjx_model = mjx.put_model(self.model)
+        _, self.predict_next, _ = generate_loss_train_functions(
+            mjx_model=mjx_model,
+            mjx_data=mjx.make_data(mjx_model),
+            change_model=lambda params, model: model,
+            make_action=self.make_action,
+            w_qpos=self.cfg.train.loss_w_qpos,
+            w_qvel=self.cfg.train.loss_w_qvel,
+            qpos_scale=self.cfg.train.loss_qpos_scale,
+            qvel_scale=self.cfg.train.loss_qvel_scale,
+            huber_delta=self.cfg.train.loss_huber_delta,
+        )
+        print("[play] Using compiled MJX playback")
+
+    def run_index(
+        self,
+        run_index: int = 0,
+        *,
+        df: pd.DataFrame | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, Path]:
+        runs = self.cfg.data.dataset.runs
+        if not -len(runs) <= run_index < len(runs):
+            raise IndexError(
+                f"run_index={run_index} is out of range for "
+                f"{len(runs)} dataset runs"
+            )
+        run_path = _resolve(runs[run_index])
+        print("[play] Loading dataset")
+        if df is None:
+            df = pd.read_csv(run_path).dropna().reset_index(drop=True)
+        print(
+            f"[play] Dataset run {run_index}: {run_path} "
+            f"rows={len(df)}"
+        )
+        qpos_meas = df["qpos"].to_numpy(dtype=np.float64)
+        qvel_meas = df["qvel"].to_numpy(dtype=np.float64)
+        ctrl_target = df["qact"].to_numpy(dtype=np.float64)
+
+        history_len = int(self.cfg.data.history_len)
+        if len(qpos_meas) < history_len:
+            raise ValueError(
+                f"Dataset is shorter than history_len: rows={len(qpos_meas)} "
+                f"history_len={history_len}"
+            )
+
+        start_idx = history_len - 1
+        qpos_hist = qpos_meas[:history_len, None].astype(np.float64)
+        qvel_hist = qvel_meas[:history_len, None].astype(np.float64)
+        qact_hist = ctrl_target[:history_len, None].astype(np.float64)
+        control_values = {
+            name: df[column].to_numpy(dtype=np.float64)
+            for name, column in self.cfg.data.dataset.rollout_fields.items()
+        }
+
+        rollout_steps = min(len(ctrl_target), len(qpos_meas)) - start_idx - 1
+        if rollout_steps <= 0:
+            raise ValueError("Dataset is too short for rollout playback.")
+
+        if self.numpy_action is None:
+            return self._run_index_mjx(
+                qpos_meas=qpos_meas,
+                qvel_meas=qvel_meas,
+                ctrl_target=ctrl_target,
+                qpos_hist=qpos_hist,
+                qvel_hist=qvel_hist,
+                qact_hist=qact_hist,
+                control_values=control_values,
+                start_idx=start_idx,
+                rollout_steps=rollout_steps,
+            )
+
+        return self._run_index_mujoco_np(
+            qpos_meas=qpos_meas,
+            qvel_meas=qvel_meas,
+            ctrl_target=ctrl_target,
+            qpos_hist=qpos_hist,
+            qvel_hist=qvel_hist,
+            qact_hist=qact_hist,
+            control_values=control_values,
+            start_idx=start_idx,
+            rollout_steps=rollout_steps,
+        )
+
+    def _run_index_mjx(
+        self,
+        *,
+        qpos_meas: np.ndarray,
+        qvel_meas: np.ndarray,
+        ctrl_target: np.ndarray,
+        qpos_hist: np.ndarray,
+        qvel_hist: np.ndarray,
+        qact_hist: np.ndarray,
+        control_values: dict[str, np.ndarray],
+        start_idx: int,
+        rollout_steps: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, Path]:
+        control_slice = slice(start_idx, start_idx + rollout_steps)
+        print(f"[play] Running compiled MJX rollout for {rollout_steps} steps...")
+        traj = self.predict_next(
+            self.best_params,
+            qpos_hist=jnp.asarray(qpos_hist),
+            qvel_hist=jnp.asarray(qvel_hist),
+            qact_hist=jnp.asarray(qact_hist),
+            qact_ctrl=jnp.asarray(ctrl_target[control_slice, None], dtype=jnp.float64),
+            control={
+                name: jnp.asarray(values[control_slice, None], dtype=jnp.float64)
+                for name, values in control_values.items()
+            },
+            time_index=jnp.arange(
+                start_idx,
+                start_idx + rollout_steps,
+                dtype=jnp.int32,
+            ),
+        )
+        sim_qpos = np.concatenate([[qpos_meas[start_idx]], np.asarray(traj)[:, 0]])
+        print("[play] Rollout finished")
+        return (
+            sim_qpos,
+            qpos_meas[start_idx:start_idx + rollout_steps + 1].copy(),
+            qvel_meas[start_idx:start_idx + rollout_steps + 1].copy(),
+            self.cfg.data.dt,
+            self.model_xml,
+        )
+
+    def _run_index_mujoco_np(
+        self,
+        *,
+        qpos_meas: np.ndarray,
+        qvel_meas: np.ndarray,
+        ctrl_target: np.ndarray,
+        qpos_hist: np.ndarray,
+        qvel_hist: np.ndarray,
+        qact_hist: np.ndarray,
+        control_values: dict[str, np.ndarray],
+        start_idx: int,
+        rollout_steps: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, Path]:
+        assert self.numpy_action is not None
+        data = mujoco.MjData(self.model)
+        data.qpos[0] = qpos_meas[start_idx]
+        data.qvel[0] = qvel_meas[start_idx]
+        mujoco.mj_forward(self.model, data)
+
+        sim_qpos = np.empty(rollout_steps + 1, dtype=np.float64)
+        print(f"[play] Running native MuJoCo rollout for {rollout_steps} steps...")
+
+        def append_history(hist: np.ndarray, value: np.ndarray) -> np.ndarray:
+            return np.concatenate([hist[1:], value.reshape(1, -1)], axis=0)
+
+        for out_i in range(rollout_steps + 1):
+            data_i = start_idx + out_i
+            sim_qpos[out_i] = data.qpos[0]
+            if out_i == rollout_steps:
+                break
+
+            tau = np.asarray(self.numpy_action(data, control_values, data_i)).reshape(-1)
+            data.ctrl[: self.model.nu] = tau[: self.model.nu]
+            for _ in range(_VAL_SUBSTEPS_PER_SAMPLE):
+                mujoco.mj_step(self.model, data)
+            qpos_hist = append_history(qpos_hist, np.asarray(data.qpos, dtype=np.float64))
+            qvel_hist = append_history(qvel_hist, np.asarray(data.qvel, dtype=np.float64))
+            qact_hist = append_history(
+                qact_hist,
+                np.asarray([ctrl_target[data_i + 1]], dtype=np.float64),
+            )
+
+        print("[play] Rollout finished")
+        return (
+            sim_qpos,
+            qpos_meas[start_idx:start_idx + rollout_steps + 1].copy(),
+            qvel_meas[start_idx:start_idx + rollout_steps + 1].copy(),
+            self.cfg.data.dt,
+            self.model_xml,
+        )
+
+
 def _prepare_rollout(
     task: str,
     checkpoint: str,
+    run_index: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, Path]:
-    _apply_jax_config_defaults()
-    print(f"[play] Loading task config: {task}")
-    cfg = get_task_config(task)
-    best_params_path = _resolve_checkpoint_path(checkpoint)
-    print(f"[play] Using checkpoint: {best_params_path}")
-
-    dataset_path = _resolve(cfg.data.dataset_path)
-    model_xml = _resolve(cfg.sim.model_xml)
-    print(f"[play] Loading dataset: {dataset_path}")
-
-    dataset, df = data_load(
-        data_path=str(dataset_path),
-        motor_id=cfg.data.motor_id,
-        num_lags=cfg.data.num_lags,
-        dtype=jnp.float64,
-    )
-    print(f"[play] Dataset loaded: {len(df)} rows")
-    qpos_meas = np.asarray(df["qpos"].values, dtype=np.float64).reshape(-1)
-    qvel_meas = np.asarray(df["qvel"].values, dtype=np.float64).reshape(-1)
-    ctrl_target = np.asarray(df["qact"].values, dtype=np.float64).reshape(-1)
-    if qpos_meas.ndim > 1:
-        qpos_meas = qpos_meas.squeeze()
-    if qvel_meas.ndim > 1:
-        qvel_meas = qvel_meas.squeeze()
-    if ctrl_target.ndim > 1:
-        ctrl_target = ctrl_target.squeeze()
-    qpos_meas = np.atleast_1d(qpos_meas)
-    qvel_meas = np.atleast_1d(qvel_meas)
-    ctrl_target = np.atleast_1d(ctrl_target)
-
-    print("[play] Loading model parameters...")
-    with best_params_path.open("rb") as f:
-        best_params = pickle.load(f)
-    print("[play] Model parameters loaded")
-
-    # Single-joint model for running learned rollout
-    print(f"[play] Building MuJoCo model: {model_xml}")
-    model_single = mujoco.MjModel.from_xml_path(str(model_xml))
-    _set_high_precision_validation_options(model_single, cfg.data.dt)
-    _apply_changers_to_model(model_single, best_params)
-    data_single = mujoco.MjData(model_single)
-
-    controller_factories = [
-        _build_component_factory(c, dataset) for c in cfg.experiment.controllers
-    ]
-    friction_factories = [
-        _build_component_factory(c, dataset) for c in cfg.experiment.frictions
-    ]
-    changer_factories = [
-        _build_component_factory(c, dataset) for c in cfg.experiment.changers
-    ]
-    make_action, _, _ = compose_action_model(
-        controllers=controller_factories,
-        frictions=friction_factories,
-        changers=changer_factories,
-        seed=jax.random.PRNGKey(cfg.train.seed),
-    )
-
-    mjx_data0 = mjx.put_data(model_single, data_single)
-    data_single.qpos[:] = qpos_meas[0]
-    data_single.qvel[:] = qvel_meas[0]
-    mujoco.mj_forward(model_single, data_single)
-
-    T = min(len(ctrl_target), len(qpos_meas))
-    print(f"[play] Running rollout for {T} steps...")
-    progress_every = max(1, T // 10)
-    sim_qpos = np.zeros(T)
-    for t in range(T):
-        sim_qpos[t] = float(data_single.qpos[0])
-        for _ in range(_VAL_SUBSTEPS_PER_SAMPLE):
-            d = mjx_data0.replace(
-                qpos=jnp.asarray(data_single.qpos),
-                qvel=jnp.asarray(data_single.qvel),
-                qfrc_bias=jnp.asarray(data_single.qfrc_bias),
-            )
-            ctrl_t = jnp.asarray([float(ctrl_target[t])], dtype=jnp.float32)
-            time_index = jnp.asarray(t, dtype=jnp.int32)
-            tau = make_action(best_params, d, ctrl_t, time_index)
-            tau_np = np.asarray(tau).reshape(-1)
-            data_single.ctrl[:] = tau_np[: model_single.nu]
-            mujoco.mj_step(model_single, data_single)
-        if (t + 1) % progress_every == 0 or (t + 1) == T:
-            pct = 100.0 * float(t + 1) / float(T)
-            print(f"[play] Rollout progress: {t + 1}/{T} ({pct:.0f}%)")
-    gt_qpos = qpos_meas[:T].copy()
-    print("[play] Rollout finished")
-    return sim_qpos, gt_qpos, qvel_meas[:T].copy(), cfg.data.dt, model_xml
+    return PlaybackRunner(task, checkpoint).run_index(run_index)
 
 
-def play(task: str, checkpoint: str) -> Tuple[np.ndarray, np.ndarray]:
+def play(
+    task: str,
+    checkpoint: str,
+    run_index: int = 0,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Run learned rollout for a task/checkpoint without visualization.
 
@@ -211,7 +427,11 @@ def play(task: str, checkpoint: str) -> Tuple[np.ndarray, np.ndarray]:
         generated_trajectory: simulated qpos trajectory from learned model
         ground_truth_trajectory: measured dataset qpos trajectory (same length)
     """
-    sim_qpos, gt_qpos, _, _, _ = _prepare_rollout(task=task, checkpoint=checkpoint)
+    sim_qpos, gt_qpos, _, _, _ = _prepare_rollout(
+        task=task,
+        checkpoint=checkpoint,
+        run_index=run_index,
+    )
     return sim_qpos, gt_qpos
 
 
@@ -261,6 +481,7 @@ def run() -> None:
     generated_qpos, ground_truth_qpos, ground_truth_qvel, dt, model_xml = _prepare_rollout(
         task=args.task,
         checkpoint=args.checkpoint,
+        run_index=args.run_index,
     )
     print(f"Generated trajectory length: {len(generated_qpos)}")
     print(f"Ground-truth trajectory length: {len(ground_truth_qpos)}")
